@@ -6,7 +6,6 @@ pub use app_menus::*;
 use assistant::AssistantPanel;
 use breadcrumbs::Breadcrumbs;
 use client::ZED_URL_SCHEME;
-use collections::VecDeque;
 use editor::{scroll::Autoscroll, Editor, MultiBuffer};
 use gpui::{
     actions, point, px, AppContext, AsyncAppContext, Context, FocusableView, PromptLevel,
@@ -526,74 +525,48 @@ fn quit(_: &Quit, cx: &mut AppContext) {
 }
 
 fn open_log_file(workspace: &mut Workspace, cx: &mut ViewContext<Workspace>) {
-    const MAX_LINES: usize = 1000;
     workspace
         .with_local_workspace(cx, move |workspace, cx| {
             let fs = workspace.app_state().fs.clone();
             cx.spawn(|workspace, mut cx| async move {
-                let (old_log, new_log) =
-                    futures::join!(fs.load(&paths::OLD_LOG), fs.load(&paths::LOG));
-                let log = match (old_log, new_log) {
-                    (Err(_), Err(_)) => None,
-                    (old_log, new_log) => {
-                        let mut lines = VecDeque::with_capacity(MAX_LINES);
-                        for line in old_log
-                            .iter()
-                            .flat_map(|log| log.lines())
-                            .chain(new_log.iter().flat_map(|log| log.lines()))
-                        {
-                            if lines.len() == MAX_LINES {
-                                lines.pop_front();
-                            }
-                            lines.push_back(line);
-                        }
-                        Some(
-                            lines
-                                .into_iter()
-                                .flat_map(|line| [line, "\n"])
-                                .collect::<String>(),
-                        )
-                    }
-                };
-
-                workspace
-                    .update(&mut cx, |workspace, cx| {
-                        let Some(log) = log else {
-                            workspace.show_notification(29, cx, |cx| {
-                                cx.new_view(|_| {
-                                    MessageNotification::new(format!(
-                                        "Unable to access/open log file at path {:?}",
-                                        paths::LOG.as_path()
-                                    ))
-                                })
-                            });
-                            return;
-                        };
-                        let project = workspace.project().clone();
-                        let buffer = project
-                            .update(cx, |project, cx| project.create_buffer(&log, None, cx))
-                            .expect("creating buffers on a local workspace always succeeds");
-
-                        let buffer = cx.new_model(|cx| {
-                            MultiBuffer::singleton(buffer, cx).with_title("Log".into())
-                        });
-                        let editor =
-                            cx.new_view(|cx| Editor::for_multibuffer(buffer, Some(project), cx));
-
-                        editor.update(cx, |editor, cx| {
-                            let last_multi_buffer_offset = editor.buffer().read(cx).len(cx);
-                            editor.change_selections(Some(Autoscroll::fit()), cx, |s| {
-                                s.select_ranges(Some(
-                                    last_multi_buffer_offset..last_multi_buffer_offset,
-                                ));
+                if !fs.is_file(&paths::LOG).await {
+                    workspace.update(&mut cx, |workspace, cx| {
+                        workspace.show_notification(29, cx, |cx| {
+                            cx.new_view(|_| {
+                                MessageNotification::new(format!(
+                                    "No log file at path {:?}",
+                                    paths::LOG.as_path()
+                                ))
                             })
                         });
+                    })?;
+                    return anyhow::Ok(());
+                }
 
-                        workspace.add_item_to_active_pane(Box::new(editor), cx);
+                let editor = workspace
+                    .update(&mut cx, |workspace, cx| {
+                        workspace.open_abs_path(paths::LOG.to_path_buf(), false, cx)
+                    })?
+                    .await
+                    .with_context(|| format!("opening log file {:?}", paths::LOG.as_path()))?
+                    .downcast::<Editor>()
+                    .with_context(|| {
+                        format!(
+                            "did not open an editor for log file {:?}",
+                            paths::LOG.as_path(),
+                        )
+                    })?;
+
+                editor.update(&mut cx, |editor, cx| {
+                    let last_multi_buffer_offset = editor.buffer().read(cx).len(cx);
+                    editor.change_selections(Some(Autoscroll::fit()), cx, |s| {
+                        s.select_ranges(Some(last_multi_buffer_offset..last_multi_buffer_offset));
                     })
-                    .log_err();
+                })?;
+
+                Ok(())
             })
-            .detach();
+            .detach_and_log_err(cx);
         })
         .detach();
 }

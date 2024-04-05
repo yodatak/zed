@@ -528,7 +528,7 @@ fn init_logger() {
         // Prevent log file from becoming too large.
         const KIB: u64 = 1024;
         const MIB: u64 = 1024 * KIB;
-        const MAX_LOG_BYTES: u64 = MIB;
+        const MAX_LOG_BYTES: u64 = 3 * MIB;
         if std::fs::metadata(&*paths::LOG).map_or(false, |metadata| metadata.len() > MAX_LOG_BYTES)
         {
             let _ = std::fs::rename(&*paths::LOG, &*paths::OLD_LOG);
