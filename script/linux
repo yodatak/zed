@@ -37,6 +37,8 @@ if [[ -n $dnf ]]; then
     g++
     alsa-lib-devel
     fontconfig-devel
+    perl-FindBin
+    perl-IPC-Cmd
     wayland-devel
     libxkbcommon-x11-devel
     openssl-devel
